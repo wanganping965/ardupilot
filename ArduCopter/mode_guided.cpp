@@ -341,7 +341,7 @@ void Copter::ModeGuided::run()
         takeoff_run();
         break;
 
-    case Guided_WP:
+    case Guided_WP:  // 指引模式-航点控制模块
         // run position controller
         pos_control_run();
         break;
@@ -413,40 +413,50 @@ void Copter::ModeGuided::takeoff_run()
 // called from guided_run
 void Copter::ModeGuided::pos_control_run()
 {
+    // 第一步，判断条件
     // if not auto armed or motors not enabled set throttle to zero and exit immediately
+    // 如果电机没有解锁，或者没有自动解锁，或者内部没有锁定或者降落完成
     if (!motors->armed() || !ap.auto_armed || !motors->get_interlock() || ap.land_complete) {
-        zero_throttle_and_relax_ac();
+        zero_throttle_and_relax_ac(); // 所有油门的值设置为0
         return;
     }
 
+    // 第二步，处理遥控器输入
     // process pilot's yaw input
-    float target_yaw_rate = 0;
-    if (!copter.failsafe.radio) {
-        // get pilot's desired yaw rate
+    // 在进行正常的航角控制
+    float target_yaw_rate = 0; // 目标航向转动速率
+    if (!copter.failsafe.radio) { // 如果遥控器没有进入失控保护，即遥控器有信号
+        // get pilot's desired yaw rate  操控手预期的目标航向速率
+        // channel_yaw->get_control_in() 遥控器航向遥感控制输入量的线性映射
         target_yaw_rate = get_pilot_desired_yaw_rate(channel_yaw->get_control_in());
-        if (!is_zero(target_yaw_rate)) {
+        if (!is_zero(target_yaw_rate)) { // 不为0时，自动航向控制设置航向锁定
             auto_yaw.set_mode(AUTO_YAW_HOLD);
         }
     }
 
-    // set motors to full range
+    // 第三步，进行航点控制，获取目标角度
+    // set motors to full range  电机输出行程设置为最大，正常飞行中不会限制电机的油门
     motors->set_desired_spool_state(AP_Motors::DESIRED_THROTTLE_UNLIMITED);
 
-    // run waypoint controller
+    // run waypoint controller    update_wpnav中的nav是导航，这一句才是更新航点导航，主要控制水平方向
     copter.failsafe_terrain_set_status(wp_nav->update_wpnav());
 
     // call z-axis position controller (wpnav should have already updated it's alt target)
+    // 垂直方向的控制器也需要更新
     pos_control->update_z_controller();
 
+    // 第四步，将目标角度赋给姿态控制器，姿态控制器根据目标角度得到目标角速度，得到油门输出
     // call attitude controller
     if (auto_yaw.mode() == AUTO_YAW_HOLD) {
         // roll & pitch from waypoint controller, yaw rate from pilot
+        // 俯仰和横滚方向进行角度控制， 目标偏航速率
         attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(wp_nav->get_roll(), wp_nav->get_pitch(), target_yaw_rate);
     } else if (auto_yaw.mode() == AUTO_YAW_RATE) {
         // roll & pitch from waypoint controller, yaw rate from mavlink command or mission item
         attitude_control->input_euler_angle_roll_pitch_euler_rate_yaw(wp_nav->get_roll(), wp_nav->get_pitch(), auto_yaw.rate_cds());
     } else {
         // roll, pitch from waypoint controller, yaw heading from GCS or auto_heading()
+        // 没有偏航角速率时，roll pitch和yaw都直接进行角度控制
         attitude_control->input_euler_angle_roll_pitch_yaw(wp_nav->get_roll(), wp_nav->get_pitch(), auto_yaw.yaw(), true);
     }
 }
